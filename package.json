@@ -1,0 +1,28 @@
+{
+  "name": "meetingnotification",
+  "version": "0.0.1",
+  "description": "MeetingNotification",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JunjiTakahashi/MeetingNotification.git"
+  },
+  "keywords": [
+    "Notification"
+  ],
+  "author": "JunjiTakahashi",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JunjiTakahashi/MeetingNotification/issues"
+  },
+  "homepage": "https://github.com/JunjiTakahashi/MeetingNotification#readme",
+  "dependencies": {
+    "async": "^2.6.0",
+    "date-utils": "^1.2.21",
+    "dotenv": "^5.0.1",
+    "googleapi": "^1.0.2"
+  }
+}
