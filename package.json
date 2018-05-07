@@ -23,6 +23,7 @@
     "async": "^2.6.0",
     "date-utils": "^1.2.21",
     "dotenv": "^5.0.1",
-    "googleapi": "^1.0.2"
+    "googleapis": "^29.0.0",
+    "mysql": "^2.15.0"
   }
 }

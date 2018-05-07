@@ -3,7 +3,7 @@ const {google} = require('googleapis');
 const privatekey = require('./privatekey.json');
 const async = require('async');
 require('dotenv').config();
-const CalendarId = CALENDAR_ID;
+const CalendarId = process.env.CALENDAR_ID;
 const mysql = require('mysql');
 const connection = mysql.createConnection({
   host     : process.env.DB_HOST,
@@ -12,6 +12,11 @@ const connection = mysql.createConnection({
   database : process.env.DB_TABLE,
   connectTimeout : 10000,
 });
+
+console.log('DB_HOST' +  process.env.DB_HOST);
+console.log('DB_USER' +  process.env.DB_USER);
+console.log('DB_PASS' +  process.env.DB_PASS);
+console.log('DB_TABLE' +  process.env.DB_TABLE);
 
 require('date-utils');
 
