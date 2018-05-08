@@ -1,31 +1,24 @@
 'use strict';
+// module 読み込み
 const {google} = require('googleapis');
-const privatekey = require('./privatekey.json');
 const async = require('async');
-require('dotenv').config();
-const CalendarId = process.env.CALENDAR_ID;
 const mysql = require('mysql');
+require('date-utils');
+require('dotenv').config();
+
+// Object生成
+const CalendarId = process.env.CALENDAR_ID;
+const privatekey = require('./privatekey.json');
 const connection = mysql.createConnection({
   host     : process.env.DB_HOST,
   user     : process.env.DB_USER,
   password : process.env.DB_PASS,
-  database : process.env.DB_TABLE,
-  connectTimeout : 10000,
+  database : process.env.DB_NAME
 });
+let today = new Date().clearTime();
+let tomorrow = new Date().add({days:1}).clearTime();
 
-console.log('DB_HOST' +  process.env.DB_HOST);
-console.log('DB_USER' +  process.env.DB_USER);
-console.log('DB_PASS' +  process.env.DB_PASS);
-console.log('DB_TABLE' +  process.env.DB_TABLE);
-
-require('date-utils');
-
-// 今日のイベントのみ取得用の変数
-let today = new Date().clearTime().toJSON();
-let tomorrow = new Date().add({days:1}).clearTime().toJSON();
-
-exports.handler = (event, context, callback) => {
-
+(function() {
   Promise.resolve()
   .then(function(){
     return new Promise(function(resolve, reject){
@@ -53,13 +46,13 @@ exports.handler = (event, context, callback) => {
       calendar.events.list({
           calendarId: CalendarId,
           auth: jwtClient,
-          timeMax: tomorrow,
-          timeMin: today,
+          timeMax: tomorrow.toJSON(),
+          timeMin: today.toJSON(),
           singleEvents: true,
           orderBy: 'startTime',
       }, function (err, response) {
          if (err) {
-             reject(err);
+           reject(err);
          }else{
            // console.log(response.data.items);
            UpdateNotification(response.data.items);
@@ -78,8 +71,7 @@ exports.handler = (event, context, callback) => {
            }
            */
          }
-      });
-      
+      });  
     });
   })
   .then(function(result){
@@ -88,8 +80,7 @@ exports.handler = (event, context, callback) => {
   .catch(function(err){
     callback(err);
   });
-
-};
+})();
 
 /**
  * 予定通知の更新
@@ -98,14 +89,42 @@ exports.handler = (event, context, callback) => {
 function UpdateNotification(items) {
   //TODO 登録済みの今日の通知予定一覧を取得
   connection.connect(function(err) {
-  if (err) {
-    console.error('error connecting: ' + err.stack);
-    return;
-  }
-  console.log('connected as id ' + connection.threadId);
-});
+    if (err) {
+      console.error('error connecting: ' + err.stack);
+      return;
+    }
+    console.log('connected as id ' + connection.threadId);
+    async.each(items, function (value, callback) {
+      console.log('time: ' + value.created);
+      console.log('format: ' + GetFormatTime(value.created));
+      connection.destroy();
+      /*
+      let sql = 'INSERT INTO notifications ' + 
+      '(calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
+      'VALUES ("' + value.id + '", "' + value.summary + '", 0, "' + value.start.dateTime + '", "' + value.end.dateTime + '", "' + value.created + '", "' + value.updated + '")';
+      console.log(sql);
+      */
+    });
+  });
+}
+  /*
+  connection.query('SELECT * FROM notifications', 
+   function(error, result, fields) {
+      console.log('error: ' + error);
+      console.log(result);
+      console.log('fields: ' + fields);
+      connection.destroy();
+  });
+  */
   //TODO 更新が必要な予定があるか判定
   //TODO 更新が必要な場合はDBを更新
+
+/**
+ * datetimeフォーマット
+ * @param {datetime} time
+ */
+function GetFormatTime(time) {
+  return new Date(time);
 }
 
 /**
