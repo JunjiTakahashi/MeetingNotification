@@ -3,11 +3,14 @@
 const {google} = require('googleapis');
 const async = require('async');
 const mysql = require('mysql');
+const _ = require('underscore');
+const Slack = require('slack-node');
 require('date-utils');
 require('dotenv').config();
 
 // Object生成
 const CalendarId = process.env.CALENDAR_ID;
+const webhookUri = process.env.WEBHOOK_URI;
 const privatekey = require('./privatekey.json');
 const connection = mysql.createConnection({
   host     : process.env.DB_HOST,
@@ -24,14 +27,16 @@ let tomorrow = new Date().add({days:1}).clearTime();
     return new Promise(function(resolve, reject){
       //JWT auth clientの設定
       const jwtClient = new google.auth.JWT(
-             privatekey.client_email,
-             null,
-             privatekey.private_key,
-             ['https://www.googleapis.com/auth/calendar']);
+        privatekey.client_email,
+        null,
+        privatekey.private_key,
+        ['https://www.googleapis.com/auth/calendar']
+      );
       //authenticate request
       jwtClient.authorize(function (err, tokens) {
         if (err) {
           reject(err);
+          PushSlack('Google authentication failed');
         } else {
           console.log("認証成功");
           resolve(jwtClient);
@@ -44,32 +49,20 @@ let tomorrow = new Date().add({days:1}).clearTime();
       const calendar = google.calendar('v3');
       // 今日の予定一覧取得
       calendar.events.list({
-          calendarId: CalendarId,
-          auth: jwtClient,
-          timeMax: tomorrow.toJSON(),
-          timeMin: today.toJSON(),
-          singleEvents: true,
-          orderBy: 'startTime',
+        calendarId: CalendarId,
+        auth: jwtClient,
+        timeMax: tomorrow.toJSON(),
+        timeMin: today.toJSON(),
+        singleEvents: true,
+        orderBy: 'startTime',
       }, function (err, response) {
          if (err) {
            reject(err);
+           PushSlack('Google API Data acquisition failure');
          }else{
+           console.log('予定取得完了');
            // console.log(response.data.items);
            UpdateNotification(response.data.items);
-           
-           /*
-           resolve(response.data.items);
-           let reservation = null;
-           reservation = GetFirstReservation(response.data.items);
-           if (reservation != null) {
-             console.log('予約取得成功');
-             console.log(reservation);
-             const setTime = new Date(reservation.end.dateTime).getTime() - 300;
-             SetAlarm(setTime);
-           } else {
-             //TODO その日の予約が1件もない場合の処理（必要？）
-           }
-           */
          }
       });  
     });
@@ -90,32 +83,92 @@ function UpdateNotification(items) {
   //TODO 登録済みの今日の通知予定一覧を取得
   connection.connect(function(err) {
     if (err) {
-      console.error('error connecting: ' + err.stack);
+      console.error('MySQL接続エラー: ' + err.stack);
+      PushSlack('MySQL Connect failed');
       return;
     }
-    console.log('connected as id ' + connection.threadId);
-    async.each(items, function (value, callback) {
-      console.log('time: ' + value.created);
-      console.log('format: ' + GetFormatTime(value.created));
-      connection.destroy();
+    console.log('MySQL接続: ' + connection.threadId);
+    connection.query('SELECT * FROM notifications WHERE notification = 1 and DATE(start_t) = DATE(NOW())', 
+    function(error, result, fields) {
+      if (_.isEmpty(result)) {
+        console.log('dataなし');
+        // Insert用のValue作成
+        let values = [];
+        async.each(items, function(value, callback) {
+          values.push('(null, ' + // id
+          '"' + value.id + '", ' + // calendar_id
+          '"' + value.summary + '", ' + // summary
+          '1, ' + // notification
+          '"' + GetFormatTime(value.start.dateTime) + '", ' + // start_t
+          '"' + GetFormatTime(value.end.dateTime) + '", ' + // end_t
+          '"' + GetFormatTime(value.created) + '", ' + // create_t
+          '"' + GetFormatTime(value.updated) + '")'); // update_t
+        });
+        let joinValue = values.join(", ");
+        let sql = 'INSERT INTO notifications (id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
+        'VALUES ' + joinValue;
+         // Insertを実行し完了後にConnection破棄
+        connection.query(sql, function(error, result, fields) {
+          console.log(result);
+          connection.destroy();
+        });
+      } else {
+        console.log('dataあり');
+        console.log(items);
+        connection.destroy();
+        /*
+        async.each(items, function(value, callback) {
+          let sql = 'INSERT INTO notifications (id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
+          'VALUES (' + 
+          'null, ' + // id
+          '"' + value.id + '", ' + // calendar_id
+          '"' + value.summary + '", ' + // summary
+          '0, ' + // notification
+          '"' + GetFormatTime(value.start.dateTime) + '", ' + // start_t
+          '"' + GetFormatTime(value.end.dateTime) + '", ' + // end_t
+          '"' + GetFormatTime(value.created) + '", ' + // create_t
+          '"' + GetFormatTime(value.updated) + '")'; // update_t
+
+          console.log(sql);
+          connection.query(sql, function(error, result, fields) {
+            console.log(error);
+            console.log(result);
+            console.log(fields);
+          });
+        });
+        */
+      }
       /*
-      let sql = 'INSERT INTO notifications ' + 
-      '(calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
-      'VALUES ("' + value.id + '", "' + value.summary + '", 0, "' + value.start.dateTime + '", "' + value.end.dateTime + '", "' + value.created + '", "' + value.updated + '")';
-      console.log(sql);
+      console.log(result['3']);
+      console.log('start: ' + result['3'].start_t);
+      console.log('end: ' + result['3'].end_t);
+      console.log('create: ' + result['3'].create_t);
+      console.log('update: ' + GetFormatTime(result['3'].update_t));
       */
+      //console.log(fields);
+      //connection.destroy();
     });
+    /*
+    async.each(items, function (value, callback) {
+      console.log('time: ' + value.start.dateTime);
+      console.log('format: ' + GetFormatTime(value.start.dateTime));
+      
+      
+      let sql = 'INSERT INTO notifications ' + 
+      '(id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
+      'VALUES (null, "' + value.id + '", "' + value.summary + '", 0, "' + GetFormatTime(value.start.dateTime) + '", "' + GetFormatTime(value.end.dateTime) + '", "' + GetFormatTime(value.created) + '", "' + GetFormatTime(value.updated) + '")';
+      console.log(sql);
+      
+      connection.query(sql, function(error, result, fields) {
+        console.log(error);
+        console.log(result);
+        console.log(fields);
+        connection.destroy();
+      });
+    });
+    */
   });
 }
-  /*
-  connection.query('SELECT * FROM notifications', 
-   function(error, result, fields) {
-      console.log('error: ' + error);
-      console.log(result);
-      console.log('fields: ' + fields);
-      connection.destroy();
-  });
-  */
   //TODO 更新が必要な予定があるか判定
   //TODO 更新が必要な場合はDBを更新
 
@@ -124,43 +177,21 @@ function UpdateNotification(items) {
  * @param {datetime} time
  */
 function GetFormatTime(time) {
-  return new Date(time);
+  return new Date(time).toFormat('YYYY-MM-DD HH24:MI:SS');
 }
 
 /**
- * 直近の予定を1件取得
- * @param {Object} items 今日の予定一覧
+ * error時の通知処理
+ * @param {string} errPoint
  */
-/*
-function GetFirstReservation(items) {
-  let reservation = null;
-  const now = new Date().getTime();
-  async.each(items, function (value, callback) {
-    console.log(value.summary);
-    const start = new Date(value.start.dateTime).getTime();
-    const end = new Date(value.end.dateTime).getTime();
-    if (start < now && end > now) {
-      reservation = value;
-      //console.log('現在の予定');
-    } else if (reservation == null && start > now) {
-      reservation = value;
-      //console.log('次の予定');
-    }
-    //TODO 予定が重なっている場合の考慮
+function PushSlack(errPoint) {
+  let slack = new Slack();
+  slack.setWebhook(webhookUri);
+  slack.webhook({
+    channel: "#nodejs",
+    username: "webhookbot",
+    text: "Point: " + errPoint
+  }, function(err, response) {
+    console.log(respose);
   });
-  //TODO 予定が取得できたらループを抜ける
-  return reservation;
 }
-*/
-
-/**
- * 指定時間にアラームセット
- * @param {int} alarm
- */
-/*
-function SetAlarm(alarm) {
-  // https://developer.amazon.com/ja/docs/alexa-voice-service/enable-named-timers-and-reminders.html
-  // この辺をURLを参考に
-  console.log("time: " + alarm);
-}
-*/
