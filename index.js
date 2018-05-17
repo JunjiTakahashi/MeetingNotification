@@ -61,7 +61,6 @@ let tomorrow = new Date().add({days:1}).clearTime();
            PushSlack('Google API Data acquisition failure');
          }else{
            console.log('予定取得完了');
-           // console.log(response.data.items);
            UpdateNotification(response.data.items);
          }
       });  
@@ -91,86 +90,78 @@ function UpdateNotification(items) {
     connection.query('SELECT * FROM notifications WHERE notification = 1 and DATE(start_t) = DATE(NOW())', 
     function(error, result, fields) {
       if (_.isEmpty(result)) {
-        console.log('dataなし');
+        console.log('当日の初期データ投入');
+        //TODO カレンダーの予定が1件もない場合の処理
         // Insert用のValue作成
         let values = [];
         async.each(items, function(value, callback) {
-          values.push('(null, ' + // id
-          '"' + value.id + '", ' + // calendar_id
-          '"' + value.summary + '", ' + // summary
-          '1, ' + // notification
-          '"' + GetFormatTime(value.start.dateTime) + '", ' + // start_t
-          '"' + GetFormatTime(value.end.dateTime) + '", ' + // end_t
-          '"' + GetFormatTime(value.created) + '", ' + // create_t
-          '"' + GetFormatTime(value.updated) + '")'); // update_t
+          values.push(GetInsertValue(value));
         });
-        let joinValue = values.join(", ");
         let sql = 'INSERT INTO notifications (id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
-        'VALUES ' + joinValue;
+        'VALUES ' + values.join(", ");
          // Insertを実行し完了後にConnection破棄
         connection.query(sql, function(error, result, fields) {
           console.log(result);
           connection.destroy();
         });
       } else {
-        console.log('dataあり');
-        console.log(items);
-        connection.destroy();
-        /*
-        async.each(items, function(value, callback) {
-          let sql = 'INSERT INTO notifications (id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
-          'VALUES (' + 
-          'null, ' + // id
-          '"' + value.id + '", ' + // calendar_id
-          '"' + value.summary + '", ' + // summary
-          '0, ' + // notification
-          '"' + GetFormatTime(value.start.dateTime) + '", ' + // start_t
-          '"' + GetFormatTime(value.end.dateTime) + '", ' + // end_t
-          '"' + GetFormatTime(value.created) + '", ' + // create_t
-          '"' + GetFormatTime(value.updated) + '")'; // update_t
-
-          console.log(sql);
-          connection.query(sql, function(error, result, fields) {
-            console.log(error);
-            console.log(result);
-            console.log(fields);
+        console.log('予定一覧アップデート');
+        let insertSql, updateSql;
+        connection.beginTransaction(function(err) {
+          if (err) { throw err; }
+          async.each(items, function(value, callback) {
+            let match = result.find(db_list => db_list.calendar_id === value.id);
+            if (match) {
+              if (GetFormatTime(match.update_t) != GetFormatTime(value.updated)) {
+                console.log('更新データあり');
+                updateSql = 'UPDATE notifications ' + GetUpdateValue(value, match.id);
+                connection.query(updateSql, function(error, result, fields) {
+                  if (error) {
+                    return connection.rollback(function() { throw error; });
+                  }
+                });
+              } else { console.log('更新データ無し'); }
+            } else {
+              //TODO 予定の新規追加
+              insertSql = 'INSERT INTO notifications (id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
+              'VALUES ' + GetInsertValue(value);
+              connection.query(insertSql, function(error, result, fields) {
+                console.log('新規データ追加');
+                if (error) {
+                  return connection.rollback(function() { throw error; });
+                }
+              });
+            }
           });
+
+          async.each(result, function(value, callback) {
+            //TODO 予定の削除
+            let unmatch = items.find(item_list => item_list.id === value.calendar_id);
+            if (!unmatch) {
+              updateSql = 'UPDATE notifications SET notification = 0 WHERE id = ' + value.id;
+              connection.query(updateSql, function(error, result, fields) {
+                console.log('データ削除');
+                if (error) {
+                  return connection.rollback(function() { throw error; });
+                }
+              });
+            }
+          });
+
+          //TODO SQLを処理してMySQL Connectをkill
+          connection.commit(function(err) {
+            if (err) {
+              return connection.rollback(function() { throw err; })
+            }
+            console.log('commit');
+            connection.destroy();
+          });
+          
         });
-        */
       }
-      /*
-      console.log(result['3']);
-      console.log('start: ' + result['3'].start_t);
-      console.log('end: ' + result['3'].end_t);
-      console.log('create: ' + result['3'].create_t);
-      console.log('update: ' + GetFormatTime(result['3'].update_t));
-      */
-      //console.log(fields);
-      //connection.destroy();
     });
-    /*
-    async.each(items, function (value, callback) {
-      console.log('time: ' + value.start.dateTime);
-      console.log('format: ' + GetFormatTime(value.start.dateTime));
-      
-      
-      let sql = 'INSERT INTO notifications ' + 
-      '(id, calendar_id, summary, notification, start_t, end_t, create_t, update_t) ' + 
-      'VALUES (null, "' + value.id + '", "' + value.summary + '", 0, "' + GetFormatTime(value.start.dateTime) + '", "' + GetFormatTime(value.end.dateTime) + '", "' + GetFormatTime(value.created) + '", "' + GetFormatTime(value.updated) + '")';
-      console.log(sql);
-      
-      connection.query(sql, function(error, result, fields) {
-        console.log(error);
-        console.log(result);
-        console.log(fields);
-        connection.destroy();
-      });
-    });
-    */
   });
 }
-  //TODO 更新が必要な予定があるか判定
-  //TODO 更新が必要な場合はDBを更新
 
 /**
  * datetimeフォーマット
@@ -194,4 +185,36 @@ function PushSlack(errPoint) {
   }, function(err, response) {
     console.log(respose);
   });
+}
+
+/**
+ * Insert用のSQL作成
+ * @param {Object} value
+ */
+function GetInsertValue(value) {
+  return '(null, ' + // id
+  '"' + value.id + '", ' + // calendar_id
+  '"' + value.summary + '", ' + // summary
+  '1, ' + // notification
+  '"' + GetFormatTime(value.start.dateTime) + '", ' + // start_t
+  '"' + GetFormatTime(value.end.dateTime) + '", ' + // end_t
+  '"' + GetFormatTime(value.created) + '", ' + // create_t
+  '"' + GetFormatTime(value.updated) + '")'; // update_t
+}
+
+/**
+ * Update用のSQL作成
+ * @param {Object} value
+ * @param {int} id
+ */
+function GetUpdateValue(value, id) {
+  return 'SET ' + 
+  'calendar_id = "' + value.id + '", ' +
+  'summary = "' + value.summary + '", ' +
+  'notification = 1, ' + 
+  'start_t = "' + GetFormatTime(value.start.dateTime) + '", ' +
+  'end_t = "' + GetFormatTime(value.end.dateTime) + '", ' + 
+  'create_t = "' + GetFormatTime(value.created) + '", ' + 
+  'update_t = "' + GetFormatTime(value.updated) + '" ' + 
+  'WHERE id = ' + id;
 }
