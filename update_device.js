@@ -3,6 +3,8 @@
 const mysql = require('mysql');
 require('date-utils');
 require('dotenv').config();
+const async = require('async');
+const _ = require('underscore');
 let mdns = require('mdns');
 let browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
@@ -13,36 +15,53 @@ const connection = mysql.createConnection({
   password : process.env.DB_PASS,
   database : process.env.DB_NAME
 });
+const sleepTime = 1000;
 
 (function() {
-    browser.start();
-    browser.on('serviceUp', function(service) {
-      //console.log('Device "%s" at %s:%d', service.name, service.addresses[0], service.port);
-      console.log('Name: "%s" DeviceID: "%s" IP: "%s"', service.txtRecord.fn, service.name, service.addresses[0]);
-      connection.query('SELECT * FROM accounts WHERE name = ' + service.txtRecord.fn, function(error, result, fields) {
-          if (result.device_id != service.name) {
-              console.log('更新が必要');
-          }
-      });
-      browser.stop();
-    });
-    /*
-    connection.connect(function(err) {
-        if (err) {
-         console.error('MySQL接続エラー: ' + err.stack);
-          PushSlack('MySQL Connect failed');
-          return;
-        }
-        console.log('MySQL接続: ' + connection.threadId);
-
-        connection.query('SELECT * FROM accounts',
-        function(error, result, fields) {
-            console.log(result);
-            //TODO 同一Wi-Fi内でキャストできるGoogleHomeを検索
-            //TODO キャストGoogleHomeと同じDeviceIDの端末をDBから検索
-            //TODO IPアドレスを更新
-            connection.destroy();
+    GetDeviceList().then(result => {
+        async.each(result, function(device, callback) {
+            connection.query('SELECT * FROM accounts WHERE name = "' + device.txtRecord.fn + '"', function(error1, result1, fields1) {
+                if (error1) {
+                    return connection.rollback(function() { throw error1; })
+                }
+                if (!_.isEmpty(result1)) {
+                    let updateSql = 'UPDATE accounts ' + 
+                    'SET device_id = "' + device.name + '", ip = "' + device.addresses[0] + '" ' + 
+                    'WHERE id = ' + result1[0].id;
+                    connection.query(updateSql, function(error2, result2, fields2) {
+                        if (error2) {
+                            return connection.rollback(function() { throw error2; })
+                        }
+                    });
+                }
+            });
         });
+        sleep(sleepTime);
+        connection.destroy();
     });
-    */
 })();
+
+/**
+ * キャストできるデバイスリストの取得
+ */
+async function GetDeviceList() {
+    browser.start();
+    let devices = [];
+    browser.on('serviceUp', function(service) {
+        console.log('Name: "%s" DeviceID: "%s" IP: "%s"', service.txtRecord.fn, service.name, service.addresses[0]);
+        devices.push(service);
+        browser.stop();
+    });
+    await sleep(sleepTime);
+    return devices;
+}
+
+/**
+ * スリープ処理
+ * @param {int} time 
+ */
+function sleep(time) {
+    return new Promise((resolve, reject) => {
+        setTimeout(() => { resolve(); }, time);
+    });
+}

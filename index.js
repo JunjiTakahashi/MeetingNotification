@@ -20,8 +20,10 @@ const connection = mysql.createConnection({
 });
 let today = new Date().clearTime();
 let tomorrow = new Date().add({days:1}).clearTime();
+const sleepTime = 1000;
 
 (function() {
+  //TODO どのアカウントで情報を更新するか定義
   Promise.resolve()
   .then(function(){
     return new Promise(function(resolve, reject){
@@ -149,6 +151,7 @@ function UpdateNotification(items) {
           });
 
           //TODO SQLを処理してMySQL Connectをkill
+          sleep(sleepTime);
           connection.commit(function(err) {
             if (err) {
               return connection.rollback(function() { throw err; })
@@ -217,4 +220,14 @@ function GetUpdateValue(value, id) {
   'create_t = "' + GetFormatTime(value.created) + '", ' + 
   'update_t = "' + GetFormatTime(value.updated) + '" ' + 
   'WHERE id = ' + id;
+}
+
+/**
+ * スリープ処理
+ * @param {int} time 
+ */
+function sleep(time) {
+  return new Promise((resolve, reject) => {
+      setTimeout(() => { resolve(); }, time);
+  });
 }
